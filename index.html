@@ -138,36 +138,6 @@ body::before {
 .ac-list::-webkit-scrollbar-track { background: transparent; }
 .ac-list::-webkit-scrollbar-thumb { background: var(--border-active); border-radius: 2px; }
 
-/* Finn import bar */
-.finn-import-bar {
-  grid-column: 1 / -1;
-  padding: 24px 32px;
-  border-bottom: 1px solid var(--border);
-}
-.finn-row {
-  display: flex; gap: 8px;
-}
-.finn-row input {
-  flex: 1; background: var(--raised); border: 1px solid var(--border);
-  border-radius: 6px; padding: 10px 12px; font-size: 13px;
-  font-family: var(--body); color: var(--text-primary); transition: all 0.2s;
-}
-.finn-row input::placeholder { color: var(--text-ghost); }
-.finn-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
-.finn-row button {
-  padding: 10px 20px; font-family: var(--body); font-size: 12px; font-weight: 500;
-  background: var(--raised); border: 1px solid var(--border); border-radius: 6px;
-  color: var(--text-secondary); cursor: pointer; transition: all 0.2s; white-space: nowrap;
-}
-.finn-row button:hover { border-color: var(--accent); color: var(--accent); }
-.finn-row button.loading { opacity: 0.5; pointer-events: none; }
-#finn-status {
-  font-size: 11px; margin-top: 8px; display: flex; align-items: center; gap: 5px;
-}
-#finn-status.ok { color: var(--positive); }
-#finn-status.err { color: var(--negative); }
-#finn-status .ac-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-
 .detail { transition: opacity 0.25s, max-height 0.3s; overflow: hidden; }
 .detail.off { max-height: 0; opacity: 0; margin: 0 !important; padding: 0 !important; gap: 0 !important; }
 
@@ -265,7 +235,6 @@ body::before {
   .val-name { font-size: 26px; }
   .stats { grid-template-columns: 1fr 1fr; }
   .f-grid { grid-template-columns: 1fr; }
-  .finn-row { flex-direction: column; }
 }
 @media (max-width: 480px) { .stats { grid-template-columns: 1fr; } .nav { overflow-x: auto; flex-wrap: nowrap; } }
 </style>
@@ -291,15 +260,6 @@ body::before {
   <div class="panel on" id="p-vurder">
     <form id="bf" autocomplete="off">
       <div class="form-area">
-        <!-- Finn URL import bar -->
-        <div class="finn-import-bar">
-          <div class="form-section-label">Importer fra Finn.no</div>
-          <div class="finn-row">
-            <input id="f-u" placeholder="Lim inn Finn-URL her..." autocomplete="off">
-            <button type="button" id="finn-btn" onclick="parseFinn()">Hent data</button>
-          </div>
-          <div id="finn-status"></div>
-        </div>
         <div class="form-col">
           <div class="form-section-label">Sykkeldata</div>
           <div class="f-grid">
@@ -310,6 +270,7 @@ body::before {
             <div class="f"><label>Rammemerke</label><div class="ac-wrap" id="ac-rm"><input id="f-rm" placeholder="Skriv for å søke..." autocomplete="off"><div class="ac-list" id="acl-rm"></div></div><div class="ac-status" id="acs-rm"></div></div>
             <div class="f"><label>Rammemateriale</label><select id="f-rmat"><option value="karbon">Karbon</option><option value="aluminium">Aluminium</option><option value="stål">Stål</option><option value="titan">Titan</option></select></div>
             <div class="f"><label>Bremser</label><select id="f-br"><option value="disc">Skivebrems</option><option value="rim">Felgbrems</option></select></div>
+            <div class="f f-span detail"><label>Finn-URL</label><input id="f-u" placeholder="https://finn.no/..."></div>
           </div>
         </div>
         <div class="form-col">
@@ -604,194 +565,6 @@ const RM_DISPLAY = [
   {label:'Uno', val:'uno', sc:'↓12%'},
 ];
 initAC('f-rm', 'acl-rm', 'acs-rm', RM_DISPLAY);
-
-/* ═══ FINN.NO URL PARSER ═══ */
-const PROXIES = [
-  u => 'https://corsproxy.io/?' + encodeURIComponent(u),
-  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
-  u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
-];
-
-async function fetchWithProxies(url) {
-  for (const mkProxy of PROXIES) {
-    try {
-      const r = await fetch(mkProxy(url), {signal: AbortSignal.timeout(8000)});
-      if (r.ok) { const t = await r.text(); if (t.length > 500) return t; }
-    } catch(e) { /* try next */ }
-  }
-  throw new Error('Alle proxyer feilet');
-}
-
-async function parseFinn() {
-  const url = $('f-u').value.trim();
-  const status = $('finn-status');
-  const btn = $('finn-btn');
-
-  if (!url || !url.includes('finn.no')) {
-    status.className = 'err';
-    status.innerHTML = '<span class="ac-dot"></span>Lim inn en gyldig Finn.no-URL';
-    return;
-  }
-
-  btn.classList.add('loading');
-  btn.textContent = 'Henter...';
-  status.className = '';
-  status.innerHTML = '<span class="ac-dot" style="background:var(--accent)"></span>Kobler til Finn.no...';
-
-  try {
-    const html = await fetchWithProxies(url);
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const allText = doc.body?.textContent || '';
-    const textLower = allText.toLowerCase();
-
-    // ── Title: h1 tag ──
-    const title = doc.querySelector('h1')?.textContent?.trim() || '';
-
-    // ── Price: look for "XX XXX kr" pattern ──
-    let price = 0;
-    const priceMatches = allText.match(/(\d[\d\s]{1,8})\s*kr/g);
-    if (priceMatches) {
-      for (const pm of priceMatches) {
-        const n = parseInt(pm.replace(/[^\d]/g, ''));
-        if (n >= 1000 && n <= 500000 && n > price) { price = n; break; }
-      }
-    }
-
-    // ── Description text: everything after "Beskrivelse" ──
-    let descText = textLower;
-    const descIdx = textLower.indexOf('beskrivelse');
-    if (descIdx > -1) descText = textLower.slice(descIdx);
-    // Also include the title
-    const searchText = (title.toLowerCase() + ' ' + descText);
-
-    // ── Year ──
-    let year = 0;
-    const yearMatches = searchText.match(/20[12]\d/g);
-    if (yearMatches) {
-      const years = yearMatches.map(Number).filter(y => y >= 2012 && y <= new Date().getFullYear() + 1);
-      if (years.length) year = Math.min(...years);
-    }
-
-    // ── Groupset ──
-    let gsMatch = '';
-    // Try specific multi-word matches first (longest first)
-    const gsSearchOrder = [...GS_DISPLAY].sort((a,b) => b.val.length - a.val.length);
-    for (const gs of gsSearchOrder) {
-      if (searchText.includes(gs.val) || searchText.includes(gs.label.toLowerCase())) {
-        gsMatch = gs.label; break;
-      }
-    }
-    if (!gsMatch) {
-      const gsKw = ['dura-ace','dura ace','ultegra','105 di2','shimano 105','tiagra','sora','claris',
-        'red etap','force etap','rival etap','red axs','force axs','rival axs',
-        'super record','record eps','chorus','potenza','centaur'];
-      for (const kw of gsKw) {
-        if (searchText.includes(kw)) {
-          const found = GS_DISPLAY.find(g => g.val.includes(kw) || g.label.toLowerCase().includes(kw));
-          if (found) { gsMatch = found.label; break; }
-        }
-      }
-    }
-
-    // ── Frame brand (search title first, then description) ──
-    let rmMatch = '';
-    const rmSearchOrder = [...RM_DISPLAY].sort((a,b) => b.val.length - a.val.length);
-    for (const rm of rmSearchOrder) {
-      if (title.toLowerCase().includes(rm.val)) { rmMatch = rm.label; break; }
-    }
-    if (!rmMatch) {
-      for (const rm of rmSearchOrder) {
-        if (searchText.includes(rm.val)) { rmMatch = rm.label; break; }
-      }
-    }
-
-    // ── Wheel brand ──
-    let hmMatch = '';
-    for (const hm of HM_DISPLAY) {
-      if (searchText.includes(hm.val)) { hmMatch = hm.label; break; }
-    }
-
-    // ── Frame material ──
-    let rmat = 'karbon';
-    if (searchText.includes('aluminium') || searchText.includes('alu ') || searchText.includes('alloy')) rmat = 'aluminium';
-    if (searchText.includes('titan')) rmat = 'titan';
-    if (searchText.includes('stål') || searchText.includes('steel') || searchText.includes('cromoly')) rmat = 'stål';
-
-    // ── Brakes ──
-    let brakes = 'disc';
-    if (searchText.includes('felgbrems') || searchText.includes('rim brake') || searchText.includes('caliper')) brakes = 'rim';
-
-    // ── Bike type ──
-    let bikeType = 'allround';
-    if (searchText.includes('aero') || searchText.includes('reacto') || searchText.includes('venge') || searchText.includes('madone') || searchText.includes('propel') || searchText.includes('systemsix')) bikeType = 'aero';
-    else if (searchText.includes('endurance') || searchText.includes('synapse') || searchText.includes('domane') || searchText.includes('roubaix') || searchText.includes('defy')) bikeType = 'endurance';
-    else if (searchText.includes('gravel') || searchText.includes('topstone') || searchText.includes('checkpoint') || searchText.includes('diverge')) bikeType = 'gravel';
-
-    // ── Size ──
-    let size = 'ukjent';
-    const sizeMap = {'xxs':'xs','xs':'xs','s':'s','m':'m','l':'l','xl':'xl','xxl':'xxl'};
-    const sizeMatch = searchText.match(/\bstr\.?\s*(xxs|xs|s|m|l|xl|xxl)\b/i) ||
-                      searchText.match(/\b(xxs|xs|xxl|xl)\b/i);
-    if (sizeMatch) { const s = sizeMatch[1].toLowerCase(); size = sizeMap[s] || 'ukjent'; }
-    // Also check for cm sizes
-    const cmMatch = searchText.match(/(\d{2})\s*cm/);
-    if (cmMatch && size === 'ukjent') {
-      const cm = parseInt(cmMatch[1]);
-      if (cm <= 49) size = 'xs'; else if (cm <= 52) size = 's'; else if (cm <= 54) size = 'm';
-      else if (cm <= 56) size = 'l'; else if (cm <= 58) size = 'xl'; else size = 'xxl';
-    }
-
-    // ── Condition ──
-    let cond = 'ukjent';
-    if (searchText.includes('som ny') || searchText.includes('ubrukt') || searchText.includes('ny i eske')) cond = 'som ny';
-    else if (searchText.includes('velholdt') || searchText.includes('god stand') || searchText.includes('pent brukt')) cond = 'velholdt';
-    else if (searchText.includes('brukt')) cond = 'brukt';
-
-    // ── Power meter ──
-    let pm = 'ingen';
-    const pmKw = {
-      'stages lr':'stages lr','stages':'stages l','quarq':'quarq','power2max':'power2max',
-      'favero assioma':'favero assioma','garmin rally':'garmin rally',
-      'srm':'srm','4iiii':'4iiii l','fsa powerbox':'fsa powerbox',
-      'wattmåler':'ukjent','power meter':'ukjent','powermeter':'ukjent'
-    };
-    for (const [kw, val] of Object.entries(pmKw)) {
-      if (searchText.includes(kw)) { pm = val; break; }
-    }
-
-    // ── Fill form ──
-    let filled = [];
-    if (title) { $('f-n').value = title; filled.push('navn'); }
-    if (price) { $('f-p').value = price; filled.push('pris'); }
-    if (year) { $('f-y').value = year; filled.push('år'); }
-    if (gsMatch) { $('f-gs').value = gsMatch; filled.push('gruppesett'); }
-    if (rmMatch) { $('f-rm').value = rmMatch; filled.push('ramme'); }
-    $('f-rmat').value = rmat;
-    $('f-br').value = brakes;
-    if (hmMatch) { $('f-hm').value = hmMatch; filled.push('hjul'); }
-    $('f-ty').value = bikeType;
-    if (size !== 'ukjent') { $('f-sz').value = size; filled.push('størrelse'); }
-    if (cond !== 'ukjent') { $('f-co').value = cond; filled.push('tilstand'); }
-    if (pm !== 'ingen') { $('f-pm').value = pm; filled.push('wattmåler'); }
-
-    // Trigger autocomplete status updates
-    ['f-gs','f-rm','f-hm'].forEach(id => {
-      $(id).dispatchEvent(new Event('input'));
-      setTimeout(() => $(id).dispatchEvent(new Event('blur')), 200);
-    });
-
-    status.className = 'ok';
-    status.innerHTML = '<span class="ac-dot"></span>Hentet ' + filled.length + ' felter: ' + filled.join(', ') + '. Kontroller og juster.';
-
-  } catch (err) {
-    status.className = 'err';
-    status.innerHTML = '<span class="ac-dot"></span>Kunne ikke hente — Finn blokkerer trolig forespørselen. Fyll inn manuelt.';
-    console.error('Finn parse error:', err);
-  } finally {
-    btn.classList.remove('loading');
-    btn.textContent = 'Hent data';
-  }
-}
 </script>
 </body>
 </html>
