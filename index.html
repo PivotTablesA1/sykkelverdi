@@ -76,8 +76,8 @@ body::before {
 @keyframes emerge { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .divider { height: 1px; background: var(--border); margin-bottom: 48px; }
 
-.form-area { display: grid; grid-template-columns: 1fr 1fr; gap: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 48px; }
-.form-col { padding: 28px 32px; }
+.form-area { display: grid; grid-template-columns: 1fr 1fr; gap: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: visible; margin-bottom: 48px; }
+.form-col { padding: 28px 32px; overflow: visible; }
 .form-col + .form-col { border-left: 1px solid var(--border); }
 .form-section-label { font-size: 10px; font-weight: 500; letter-spacing: 2px; text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
 .form-section-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
@@ -105,6 +105,7 @@ body::before {
 /* Autocomplete */
 .ac-wrap { position: relative; }
 .ac-wrap input { width: 100%; }
+.f:has(.ac-wrap) { overflow: visible; }
 .ac-list {
   position: absolute; top: 100%; left: 0; right: 0; z-index: 100;
   background: var(--elevated); border: 1px solid var(--border-active);
@@ -116,7 +117,9 @@ body::before {
   padding: 9px 12px; font-size: 13px; cursor: pointer;
   color: var(--text-secondary); transition: all 0.1s;
   display: flex; justify-content: space-between; align-items: center;
+  gap: 8px;
 }
+.ac-item-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ac-item:first-child { border-radius: 6px 6px 0 0; }
 .ac-item:last-child { border-radius: 0 0 6px 6px; }
 .ac-item:hover, .ac-item.active { background: var(--accent-dim); color: var(--text-primary); }
@@ -134,6 +137,36 @@ body::before {
 .ac-list::-webkit-scrollbar { width: 4px; }
 .ac-list::-webkit-scrollbar-track { background: transparent; }
 .ac-list::-webkit-scrollbar-thumb { background: var(--border-active); border-radius: 2px; }
+
+/* Finn import bar */
+.finn-import-bar {
+  grid-column: 1 / -1;
+  padding: 24px 32px;
+  border-bottom: 1px solid var(--border);
+}
+.finn-row {
+  display: flex; gap: 8px;
+}
+.finn-row input {
+  flex: 1; background: var(--raised); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 12px; font-size: 13px;
+  font-family: var(--body); color: var(--text-primary); transition: all 0.2s;
+}
+.finn-row input::placeholder { color: var(--text-ghost); }
+.finn-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.finn-row button {
+  padding: 10px 20px; font-family: var(--body); font-size: 12px; font-weight: 500;
+  background: var(--raised); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-secondary); cursor: pointer; transition: all 0.2s; white-space: nowrap;
+}
+.finn-row button:hover { border-color: var(--accent); color: var(--accent); }
+.finn-row button.loading { opacity: 0.5; pointer-events: none; }
+#finn-status {
+  font-size: 11px; margin-top: 8px; display: flex; align-items: center; gap: 5px;
+}
+#finn-status.ok { color: var(--positive); }
+#finn-status.err { color: var(--negative); }
+#finn-status .ac-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 
 .detail { transition: opacity 0.25s, max-height 0.3s; overflow: hidden; }
 .detail.off { max-height: 0; opacity: 0; margin: 0 !important; padding: 0 !important; gap: 0 !important; }
@@ -232,6 +265,7 @@ body::before {
   .val-name { font-size: 26px; }
   .stats { grid-template-columns: 1fr 1fr; }
   .f-grid { grid-template-columns: 1fr; }
+  .finn-row { flex-direction: column; }
 }
 @media (max-width: 480px) { .stats { grid-template-columns: 1fr; } .nav { overflow-x: auto; flex-wrap: nowrap; } }
 </style>
@@ -257,6 +291,15 @@ body::before {
   <div class="panel on" id="p-vurder">
     <form id="bf" autocomplete="off">
       <div class="form-area">
+        <!-- Finn URL import bar -->
+        <div class="finn-import-bar">
+          <div class="form-section-label">Importer fra Finn.no</div>
+          <div class="finn-row">
+            <input id="f-u" placeholder="Lim inn Finn-URL her..." autocomplete="off">
+            <button type="button" id="finn-btn" onclick="parseFinn()">Hent data</button>
+          </div>
+          <div id="finn-status"></div>
+        </div>
         <div class="form-col">
           <div class="form-section-label">Sykkeldata</div>
           <div class="f-grid">
@@ -264,10 +307,9 @@ body::before {
             <div class="f"><label>Pris (NOK)</label><input type="number" id="f-p" placeholder="45 000" required></div>
             <div class="f"><label>Årsmodell</label><input type="number" id="f-y" placeholder="2023" required></div>
             <div class="f f-span"><label>Gruppesett</label><div class="ac-wrap" id="ac-gs"><input id="f-gs" placeholder="Skriv for å søke..." autocomplete="off"><div class="ac-list" id="acl-gs"></div></div><div class="ac-status" id="acs-gs"></div></div>
-            <div class="f"><label>Rammemerke</label><input id="f-rm" placeholder="Canyon"></div>
+            <div class="f"><label>Rammemerke</label><div class="ac-wrap" id="ac-rm"><input id="f-rm" placeholder="Skriv for å søke..." autocomplete="off"><div class="ac-list" id="acl-rm"></div></div><div class="ac-status" id="acs-rm"></div></div>
             <div class="f"><label>Rammemateriale</label><select id="f-rmat"><option value="karbon">Karbon</option><option value="aluminium">Aluminium</option><option value="stål">Stål</option><option value="titan">Titan</option></select></div>
             <div class="f"><label>Bremser</label><select id="f-br"><option value="disc">Skivebrems</option><option value="rim">Felgbrems</option></select></div>
-            <div class="f detail"><label>Finn-URL</label><input id="f-u" placeholder="https://finn.no/..."></div>
           </div>
         </div>
         <div class="form-col">
@@ -473,7 +515,7 @@ function initAC(inputId, listId, statusId, items) {
     if (!filtered.length) { list.classList.remove('open'); if (q) setStatus(null); return; }
     activeIdx = -1;
     list.innerHTML = filtered.map((it, i) =>
-      '<div class="ac-item" data-i="'+i+'">' + hl(it.label, query) + '<span class="ac-score">'+it.sc+'</span></div>'
+      '<div class="ac-item" data-i="'+i+'"><span class="ac-item-label">' + hl(it.label, query) + '</span><span class="ac-score">'+it.sc+'</span></div>'
     ).join('');
     list.classList.add('open');
     const exact = items.find(it => it.val === q || it.label.toLowerCase() === q);
@@ -526,6 +568,203 @@ function initAC(inputId, listId, statusId, items) {
 
 initAC('f-gs', 'acl-gs', 'acs-gs', GS_DISPLAY);
 initAC('f-hm', 'acl-hm', 'acs-hm', HM_DISPLAY);
+
+const RM_DISPLAY = [
+  {label:'Pinarello', val:'pinarello', sc:'↑8%'},
+  {label:'Cervélo', val:'cervélo', sc:'↑5%'},
+  {label:'Colnago', val:'colnago', sc:'↑5%'},
+  {label:'Factor', val:'factor', sc:'↑5%'},
+  {label:'De Rosa', val:'de rosa', sc:'↑5%'},
+  {label:'Specialized', val:'specialized', sc:'↑3%'},
+  {label:'Trek', val:'trek', sc:'↑3%'},
+  {label:'BMC', val:'bmc', sc:'↑2%'},
+  {label:'Scott', val:'scott', sc:'0%'},
+  {label:'Cannondale', val:'cannondale', sc:'0%'},
+  {label:'Bianchi', val:'bianchi', sc:'0%'},
+  {label:'Look', val:'look', sc:'0%'},
+  {label:'Wilier', val:'wilier', sc:'0%'},
+  {label:'Ridley', val:'ridley', sc:'↓2%'},
+  {label:'Orbea', val:'orbea', sc:'↓2%'},
+  {label:'Argon 18', val:'argon 18', sc:'↓2%'},
+  {label:'Giant', val:'giant', sc:'↓3%'},
+  {label:'Merida', val:'merida', sc:'↓3%'},
+  {label:'Dare', val:'dare', sc:'↓3%'},
+  {label:'Lapierre', val:'lapierre', sc:'↓4%'},
+  {label:'Eddy Merckx', val:'eddy merckx', sc:'↓3%'},
+  {label:'Canyon', val:'canyon', sc:'↓12%'},
+  {label:'Cube', val:'cube', sc:'↓7%'},
+  {label:'Felt', val:'felt', sc:'↓7%'},
+  {label:'Focus', val:'focus', sc:'↓7%'},
+  {label:'Rose', val:'rose', sc:'↓8%'},
+  {label:'Fuji', val:'fuji', sc:'↓8%'},
+  {label:'Ribble', val:'ribble', sc:'↓8%'},
+  {label:'Vitus', val:'vitus', sc:'↓10%'},
+  {label:'B\'Twin', val:'btwin', sc:'↓18%'},
+  {label:'Triban', val:'triban', sc:'↓18%'},
+  {label:'Uno', val:'uno', sc:'↓12%'},
+];
+initAC('f-rm', 'acl-rm', 'acs-rm', RM_DISPLAY);
+
+/* ═══ FINN.NO URL PARSER ═══ */
+async function parseFinn() {
+  const url = $('f-u').value.trim();
+  const status = $('finn-status');
+  const btn = $('finn-btn');
+
+  if (!url || !url.includes('finn.no')) {
+    status.className = 'err';
+    status.innerHTML = '<span class="ac-dot"></span>Lim inn en gyldig Finn.no-URL';
+    return;
+  }
+
+  btn.classList.add('loading');
+  btn.textContent = 'Henter...';
+  status.className = '';
+  status.innerHTML = '';
+
+  try {
+    // Use a CORS proxy to fetch the Finn page
+    const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+    const resp = await fetch(proxyUrl);
+    if (!resp.ok) throw new Error('Kunne ikke hente annonsen');
+    const html = await resp.text();
+
+    // Parse the HTML
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    // Extract title
+    const title = doc.querySelector('h1')?.textContent?.trim() ||
+                  doc.querySelector('[data-testid="ad-title"]')?.textContent?.trim() || '';
+
+    // Extract price
+    let price = 0;
+    const priceEl = doc.querySelector('[data-testid="pricing-incl-vat"]') ||
+                    doc.querySelector('.u-t3');
+    if (priceEl) {
+      const priceText = priceEl.textContent.replace(/[^\d]/g, '');
+      price = parseInt(priceText) || 0;
+    }
+    if (!price) {
+      const allText = html;
+      const priceMatch = allText.match(/(\d[\d\s]{2,8})\s*kr/);
+      if (priceMatch) price = parseInt(priceMatch[1].replace(/\s/g, '')) || 0;
+    }
+
+    // Extract body text for parsing specs
+    const bodyText = (doc.querySelector('[data-testid="ad-description"]')?.textContent ||
+                      doc.querySelector('.u-word-break')?.textContent ||
+                      doc.body?.textContent || '').toLowerCase();
+
+    // Extract year
+    let year = 0;
+    const yearMatch = bodyText.match(/(?:20[12]\d)/g);
+    if (yearMatch) {
+      const years = yearMatch.map(Number).filter(y => y >= 2010 && y <= new Date().getFullYear());
+      if (years.length) year = Math.min(...years);
+    }
+
+    // Match groupset
+    let gsMatch = '';
+    for (const gs of GS_DISPLAY) {
+      if (bodyText.includes(gs.val) || bodyText.includes(gs.label.toLowerCase())) {
+        gsMatch = gs.label;
+        break;
+      }
+    }
+    // Try partial matches
+    if (!gsMatch) {
+      const gsKeywords = ['dura-ace','dura ace','ultegra','105','tiagra','sora','claris',
+        'red etap','force etap','rival etap','red axs','force axs','rival axs',
+        'super record','record eps','chorus','potenza','centaur'];
+      for (const kw of gsKeywords) {
+        if (bodyText.includes(kw)) {
+          const found = GS_DISPLAY.find(g => g.val.includes(kw) || g.label.toLowerCase().includes(kw));
+          if (found) { gsMatch = found.label; break; }
+        }
+      }
+    }
+
+    // Match frame brand
+    let rmMatch = '';
+    for (const rm of RM_DISPLAY) {
+      if (title.toLowerCase().includes(rm.val) || bodyText.includes(rm.val)) {
+        rmMatch = rm.label;
+        break;
+      }
+    }
+
+    // Match wheel brand
+    let hmMatch = '';
+    for (const hm of HM_DISPLAY) {
+      if (bodyText.includes(hm.val)) {
+        hmMatch = hm.label;
+        break;
+      }
+    }
+
+    // Detect frame material
+    let rmat = 'karbon';
+    if (bodyText.includes('aluminium') || bodyText.includes('alu ')) rmat = 'aluminium';
+    if (bodyText.includes('titan')) rmat = 'titan';
+    if (bodyText.includes('stål') || bodyText.includes('steel') || bodyText.includes('cromoly')) rmat = 'stål';
+
+    // Detect brakes
+    let brakes = 'disc';
+    if (bodyText.includes('felgbrems') || bodyText.includes('rim brake') || bodyText.includes('caliper')) brakes = 'rim';
+
+    // Detect electronic
+    const isElectronic = ['di2','etap','e-tap','eps','axs'].some(x => bodyText.includes(x));
+
+    // Detect bike type
+    let bikeType = 'allround';
+    if (bodyText.includes('aero')) bikeType = 'aero';
+    else if (bodyText.includes('endurance')) bikeType = 'endurance';
+    else if (bodyText.includes('gravel')) bikeType = 'gravel';
+
+    // Detect power meter
+    let pm = 'ingen';
+    const pmKeywords = {
+      'stages lr':'stages lr','stages':'stages l','quarq':'quarq','power2max':'power2max',
+      'favero assioma':'favero assioma','garmin rally':'garmin rally',
+      'srm':'srm','4iiii':'4iiii l','fsa powerbox':'fsa powerbox',
+      'wattmåler':'ukjent','power meter':'ukjent','powermeter':'ukjent'
+    };
+    for (const [kw, val] of Object.entries(pmKeywords)) {
+      if (bodyText.includes(kw)) { pm = val; break; }
+    }
+
+    // Fill in the form
+    let filled = [];
+    if (title) { $('f-n').value = title; filled.push('navn'); }
+    if (price) { $('f-p').value = price; filled.push('pris'); }
+    if (year) { $('f-y').value = year; filled.push('år'); }
+    if (gsMatch) { $('f-gs').value = gsMatch; filled.push('gruppesett'); }
+    if (rmMatch) { $('f-rm').value = rmMatch; filled.push('ramme'); }
+    $('f-rmat').value = rmat; filled.push('materiale');
+    $('f-br').value = brakes;
+    if (hmMatch) { $('f-hm').value = hmMatch; filled.push('hjul'); }
+    $('f-ty').value = bikeType;
+    if (pm !== 'ingen') { $('f-pm').value = pm; filled.push('wattmåler'); }
+
+    // Trigger status updates for autocomplete fields
+    ['f-gs','f-rm','f-hm'].forEach(id => {
+      $(id).dispatchEvent(new Event('input'));
+      setTimeout(() => $(id).dispatchEvent(new Event('blur')), 200);
+    });
+
+    status.className = 'ok';
+    status.innerHTML = '<span class="ac-dot"></span>Hentet ' + filled.length + ' felter: ' + filled.join(', ') + '. Kontroller og juster før vurdering.';
+
+  } catch (err) {
+    status.className = 'err';
+    status.innerHTML = '<span class="ac-dot"></span>Kunne ikke hente annonsen. Prøv å fylle inn manuelt.';
+    console.error('Finn parse error:', err);
+  } finally {
+    btn.classList.remove('loading');
+    btn.textContent = 'Hent data';
+  }
+}
 </script>
 </body>
 </html>
