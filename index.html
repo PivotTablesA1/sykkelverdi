@@ -606,6 +606,22 @@ const RM_DISPLAY = [
 initAC('f-rm', 'acl-rm', 'acs-rm', RM_DISPLAY);
 
 /* ═══ FINN.NO URL PARSER ═══ */
+const PROXIES = [
+  u => 'https://corsproxy.io/?' + encodeURIComponent(u),
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
+];
+
+async function fetchWithProxies(url) {
+  for (const mkProxy of PROXIES) {
+    try {
+      const r = await fetch(mkProxy(url), {signal: AbortSignal.timeout(8000)});
+      if (r.ok) { const t = await r.text(); if (t.length > 500) return t; }
+    } catch(e) { /* try next */ }
+  }
+  throw new Error('Alle proxyer feilet');
+}
+
 async function parseFinn() {
   const url = $('f-u').value.trim();
   const status = $('finn-status');
@@ -620,145 +636,156 @@ async function parseFinn() {
   btn.classList.add('loading');
   btn.textContent = 'Henter...';
   status.className = '';
-  status.innerHTML = '';
+  status.innerHTML = '<span class="ac-dot" style="background:var(--accent)"></span>Kobler til Finn.no...';
 
   try {
-    // Use a CORS proxy to fetch the Finn page
-    const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-    const resp = await fetch(proxyUrl);
-    if (!resp.ok) throw new Error('Kunne ikke hente annonsen');
-    const html = await resp.text();
+    const html = await fetchWithProxies(url);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const allText = doc.body?.textContent || '';
+    const textLower = allText.toLowerCase();
 
-    // Parse the HTML
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
+    // ── Title: h1 tag ──
+    const title = doc.querySelector('h1')?.textContent?.trim() || '';
 
-    // Extract title
-    const title = doc.querySelector('h1')?.textContent?.trim() ||
-                  doc.querySelector('[data-testid="ad-title"]')?.textContent?.trim() || '';
-
-    // Extract price
+    // ── Price: look for "XX XXX kr" pattern ──
     let price = 0;
-    const priceEl = doc.querySelector('[data-testid="pricing-incl-vat"]') ||
-                    doc.querySelector('.u-t3');
-    if (priceEl) {
-      const priceText = priceEl.textContent.replace(/[^\d]/g, '');
-      price = parseInt(priceText) || 0;
-    }
-    if (!price) {
-      const allText = html;
-      const priceMatch = allText.match(/(\d[\d\s]{2,8})\s*kr/);
-      if (priceMatch) price = parseInt(priceMatch[1].replace(/\s/g, '')) || 0;
+    const priceMatches = allText.match(/(\d[\d\s]{1,8})\s*kr/g);
+    if (priceMatches) {
+      for (const pm of priceMatches) {
+        const n = parseInt(pm.replace(/[^\d]/g, ''));
+        if (n >= 1000 && n <= 500000 && n > price) { price = n; break; }
+      }
     }
 
-    // Extract body text for parsing specs
-    const bodyText = (doc.querySelector('[data-testid="ad-description"]')?.textContent ||
-                      doc.querySelector('.u-word-break')?.textContent ||
-                      doc.body?.textContent || '').toLowerCase();
+    // ── Description text: everything after "Beskrivelse" ──
+    let descText = textLower;
+    const descIdx = textLower.indexOf('beskrivelse');
+    if (descIdx > -1) descText = textLower.slice(descIdx);
+    // Also include the title
+    const searchText = (title.toLowerCase() + ' ' + descText);
 
-    // Extract year
+    // ── Year ──
     let year = 0;
-    const yearMatch = bodyText.match(/(?:20[12]\d)/g);
-    if (yearMatch) {
-      const years = yearMatch.map(Number).filter(y => y >= 2010 && y <= new Date().getFullYear());
+    const yearMatches = searchText.match(/20[12]\d/g);
+    if (yearMatches) {
+      const years = yearMatches.map(Number).filter(y => y >= 2012 && y <= new Date().getFullYear() + 1);
       if (years.length) year = Math.min(...years);
     }
 
-    // Match groupset
+    // ── Groupset ──
     let gsMatch = '';
-    for (const gs of GS_DISPLAY) {
-      if (bodyText.includes(gs.val) || bodyText.includes(gs.label.toLowerCase())) {
-        gsMatch = gs.label;
-        break;
+    // Try specific multi-word matches first (longest first)
+    const gsSearchOrder = [...GS_DISPLAY].sort((a,b) => b.val.length - a.val.length);
+    for (const gs of gsSearchOrder) {
+      if (searchText.includes(gs.val) || searchText.includes(gs.label.toLowerCase())) {
+        gsMatch = gs.label; break;
       }
     }
-    // Try partial matches
     if (!gsMatch) {
-      const gsKeywords = ['dura-ace','dura ace','ultegra','105','tiagra','sora','claris',
+      const gsKw = ['dura-ace','dura ace','ultegra','105 di2','shimano 105','tiagra','sora','claris',
         'red etap','force etap','rival etap','red axs','force axs','rival axs',
         'super record','record eps','chorus','potenza','centaur'];
-      for (const kw of gsKeywords) {
-        if (bodyText.includes(kw)) {
+      for (const kw of gsKw) {
+        if (searchText.includes(kw)) {
           const found = GS_DISPLAY.find(g => g.val.includes(kw) || g.label.toLowerCase().includes(kw));
           if (found) { gsMatch = found.label; break; }
         }
       }
     }
 
-    // Match frame brand
+    // ── Frame brand (search title first, then description) ──
     let rmMatch = '';
-    for (const rm of RM_DISPLAY) {
-      if (title.toLowerCase().includes(rm.val) || bodyText.includes(rm.val)) {
-        rmMatch = rm.label;
-        break;
+    const rmSearchOrder = [...RM_DISPLAY].sort((a,b) => b.val.length - a.val.length);
+    for (const rm of rmSearchOrder) {
+      if (title.toLowerCase().includes(rm.val)) { rmMatch = rm.label; break; }
+    }
+    if (!rmMatch) {
+      for (const rm of rmSearchOrder) {
+        if (searchText.includes(rm.val)) { rmMatch = rm.label; break; }
       }
     }
 
-    // Match wheel brand
+    // ── Wheel brand ──
     let hmMatch = '';
     for (const hm of HM_DISPLAY) {
-      if (bodyText.includes(hm.val)) {
-        hmMatch = hm.label;
-        break;
-      }
+      if (searchText.includes(hm.val)) { hmMatch = hm.label; break; }
     }
 
-    // Detect frame material
+    // ── Frame material ──
     let rmat = 'karbon';
-    if (bodyText.includes('aluminium') || bodyText.includes('alu ')) rmat = 'aluminium';
-    if (bodyText.includes('titan')) rmat = 'titan';
-    if (bodyText.includes('stål') || bodyText.includes('steel') || bodyText.includes('cromoly')) rmat = 'stål';
+    if (searchText.includes('aluminium') || searchText.includes('alu ') || searchText.includes('alloy')) rmat = 'aluminium';
+    if (searchText.includes('titan')) rmat = 'titan';
+    if (searchText.includes('stål') || searchText.includes('steel') || searchText.includes('cromoly')) rmat = 'stål';
 
-    // Detect brakes
+    // ── Brakes ──
     let brakes = 'disc';
-    if (bodyText.includes('felgbrems') || bodyText.includes('rim brake') || bodyText.includes('caliper')) brakes = 'rim';
+    if (searchText.includes('felgbrems') || searchText.includes('rim brake') || searchText.includes('caliper')) brakes = 'rim';
 
-    // Detect electronic
-    const isElectronic = ['di2','etap','e-tap','eps','axs'].some(x => bodyText.includes(x));
-
-    // Detect bike type
+    // ── Bike type ──
     let bikeType = 'allround';
-    if (bodyText.includes('aero')) bikeType = 'aero';
-    else if (bodyText.includes('endurance')) bikeType = 'endurance';
-    else if (bodyText.includes('gravel')) bikeType = 'gravel';
+    if (searchText.includes('aero') || searchText.includes('reacto') || searchText.includes('venge') || searchText.includes('madone') || searchText.includes('propel') || searchText.includes('systemsix')) bikeType = 'aero';
+    else if (searchText.includes('endurance') || searchText.includes('synapse') || searchText.includes('domane') || searchText.includes('roubaix') || searchText.includes('defy')) bikeType = 'endurance';
+    else if (searchText.includes('gravel') || searchText.includes('topstone') || searchText.includes('checkpoint') || searchText.includes('diverge')) bikeType = 'gravel';
 
-    // Detect power meter
+    // ── Size ──
+    let size = 'ukjent';
+    const sizeMap = {'xxs':'xs','xs':'xs','s':'s','m':'m','l':'l','xl':'xl','xxl':'xxl'};
+    const sizeMatch = searchText.match(/\bstr\.?\s*(xxs|xs|s|m|l|xl|xxl)\b/i) ||
+                      searchText.match(/\b(xxs|xs|xxl|xl)\b/i);
+    if (sizeMatch) { const s = sizeMatch[1].toLowerCase(); size = sizeMap[s] || 'ukjent'; }
+    // Also check for cm sizes
+    const cmMatch = searchText.match(/(\d{2})\s*cm/);
+    if (cmMatch && size === 'ukjent') {
+      const cm = parseInt(cmMatch[1]);
+      if (cm <= 49) size = 'xs'; else if (cm <= 52) size = 's'; else if (cm <= 54) size = 'm';
+      else if (cm <= 56) size = 'l'; else if (cm <= 58) size = 'xl'; else size = 'xxl';
+    }
+
+    // ── Condition ──
+    let cond = 'ukjent';
+    if (searchText.includes('som ny') || searchText.includes('ubrukt') || searchText.includes('ny i eske')) cond = 'som ny';
+    else if (searchText.includes('velholdt') || searchText.includes('god stand') || searchText.includes('pent brukt')) cond = 'velholdt';
+    else if (searchText.includes('brukt')) cond = 'brukt';
+
+    // ── Power meter ──
     let pm = 'ingen';
-    const pmKeywords = {
+    const pmKw = {
       'stages lr':'stages lr','stages':'stages l','quarq':'quarq','power2max':'power2max',
       'favero assioma':'favero assioma','garmin rally':'garmin rally',
       'srm':'srm','4iiii':'4iiii l','fsa powerbox':'fsa powerbox',
       'wattmåler':'ukjent','power meter':'ukjent','powermeter':'ukjent'
     };
-    for (const [kw, val] of Object.entries(pmKeywords)) {
-      if (bodyText.includes(kw)) { pm = val; break; }
+    for (const [kw, val] of Object.entries(pmKw)) {
+      if (searchText.includes(kw)) { pm = val; break; }
     }
 
-    // Fill in the form
+    // ── Fill form ──
     let filled = [];
     if (title) { $('f-n').value = title; filled.push('navn'); }
     if (price) { $('f-p').value = price; filled.push('pris'); }
     if (year) { $('f-y').value = year; filled.push('år'); }
     if (gsMatch) { $('f-gs').value = gsMatch; filled.push('gruppesett'); }
     if (rmMatch) { $('f-rm').value = rmMatch; filled.push('ramme'); }
-    $('f-rmat').value = rmat; filled.push('materiale');
+    $('f-rmat').value = rmat;
     $('f-br').value = brakes;
     if (hmMatch) { $('f-hm').value = hmMatch; filled.push('hjul'); }
     $('f-ty').value = bikeType;
+    if (size !== 'ukjent') { $('f-sz').value = size; filled.push('størrelse'); }
+    if (cond !== 'ukjent') { $('f-co').value = cond; filled.push('tilstand'); }
     if (pm !== 'ingen') { $('f-pm').value = pm; filled.push('wattmåler'); }
 
-    // Trigger status updates for autocomplete fields
+    // Trigger autocomplete status updates
     ['f-gs','f-rm','f-hm'].forEach(id => {
       $(id).dispatchEvent(new Event('input'));
       setTimeout(() => $(id).dispatchEvent(new Event('blur')), 200);
     });
 
     status.className = 'ok';
-    status.innerHTML = '<span class="ac-dot"></span>Hentet ' + filled.length + ' felter: ' + filled.join(', ') + '. Kontroller og juster før vurdering.';
+    status.innerHTML = '<span class="ac-dot"></span>Hentet ' + filled.length + ' felter: ' + filled.join(', ') + '. Kontroller og juster.';
 
   } catch (err) {
     status.className = 'err';
-    status.innerHTML = '<span class="ac-dot"></span>Kunne ikke hente annonsen. Prøv å fylle inn manuelt.';
+    status.innerHTML = '<span class="ac-dot"></span>Kunne ikke hente — Finn blokkerer trolig forespørselen. Fyll inn manuelt.';
     console.error('Finn parse error:', err);
   } finally {
     btn.classList.remove('loading');
